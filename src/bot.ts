@@ -31,6 +31,7 @@ export interface Entry {
   date: ParsedDate;
   phone: string | null;
   greetings: string[];
+  memorial: boolean;
 }
 
 const MAX_GREETINGS = 3;
@@ -71,7 +72,8 @@ function helpText(env: Env): string {
     "• Ana 2 de mayo de 1990\n" +
     "• cumple de Caro el 7/11\n" +
     "El año es opcional. Podés mandar varios juntos, uno por línea, o un archivo .txt.\n" +
-    "Opcional, separado con |: su WhatsApp y hasta 3 saludos, ej: Juan 15/03 | +5491122334455 | ¡Feliz cumple crack!\n\n" +
+    "Opcional, separado con |: su WhatsApp y hasta 3 saludos, ej: Juan 15/03 | +5491122334455 | ¡Feliz cumple crack!\n" +
+    "Para alguien que falleció: Juan 15/03 | en memoria (solo te recuerda la fecha)\n\n" +
     "lista — ver todos\n" +
     "proximos — los próximos 30 días\n" +
     "borrar Juan — borrar (por nombre o por id)\n" +
@@ -91,11 +93,11 @@ export function describe(e: Event, ref: YMD): string {
   const days = daysBetween(ref, next);
   const when = days === 0 ? "¡hoy!" : days === 1 ? "mañana" : `en ${days} días`;
   let extra = "";
-  if (e.year) {
+  if (e.year && !e.memorial) {
     const n = next.year - e.year;
     extra = e.kind === "birthday" ? ` (cumple ${n})` : ` (${n} años)`;
   }
-  return `${ICONS[e.kind]} #${e.id} ${e.name} — ${formatDate(e.day, e.month)}${extra} — ${when}`;
+  return `${e.memorial ? "🕯️" : ICONS[e.kind]} #${e.id} ${e.name} — ${formatDate(e.day, e.month)}${extra} — ${when}`;
 }
 
 /** Aviso del día (HTML), con los saludos sugeridos y botones para copiarlos o abrir WhatsApp con el texto ya escrito. */
@@ -105,6 +107,7 @@ export function reminderMessage(e: Event, d: YMD): { text: string; buttons: Inli
     const years = e.year ? ` (${d.year - e.year} años)` : "";
     return { text: `📅 Hoy: ${name}${years}`, buttons: [] };
   }
+  if (e.memorial) return { text: `🕯️ Hoy sería el cumpleaños de <b>${name}</b>.`, buttons: [] };
   const age = e.year ? ` Cumple ${d.year - e.year} 🥳` : "";
   let text = `🎂 ¡Hoy es el cumpleaños de <b>${name}</b>!${age}\n`;
   const many = e.greetings.length > 1;
@@ -124,18 +127,20 @@ export function reminderMessage(e: Event, d: YMD): { text: string; buttons: Inli
   return { text, buttons };
 }
 
-/** Una línea de carga: "nombre fecha [| teléfono] [| saludo 1 | saludo 2 | saludo 3]". */
+/** Una línea de carga: "nombre fecha [| teléfono] [| saludo 1 | saludo 2 | saludo 3] [| en memoria]". */
 export function parseLine(line: string, currentYear: number): Entry | { error: string } {
   const [main, ...extras] = line.split("|").map((s) => s.trim());
   const entry = extractEntry(main, currentYear);
   if ("error" in entry) return entry;
   let phone: string | null = null;
+  let memorial = false;
   const greetings: string[] = [];
   for (const extra of extras.filter(Boolean)) {
     if (/^\+?[\d\s\-()]{8,}$/.test(extra)) phone = extra.replace(/\D/g, "");
+    else if (fold(extra) === "en memoria") memorial = true;
     else if (greetings.length < MAX_GREETINGS) greetings.push(extra);
   }
-  return { ...entry, phone, greetings };
+  return { ...entry, phone, greetings, memorial };
 }
 
 /**
@@ -295,7 +300,7 @@ async function handleCallback(cb: TgCallbackQuery, env: Env): Promise<void> {
   }
   await db.clearConversation(env.DB, chatId);
   const entry = JSON.parse(conv.payload) as Entry;
-  const newEvent: db.NewEvent = { chat_id: chatId, kind: "birthday", name: entry.name, ...entry.date, phone: entry.phone, greetings: entry.greetings };
+  const newEvent: db.NewEvent = { chat_id: chatId, kind: "birthday", name: entry.name, ...entry.date, phone: entry.phone, greetings: entry.greetings, memorial: entry.memorial };
   const ref = today(env);
   if (add[1] === "no") {
     await edit("Cancelado, no cargué nada.");
@@ -324,7 +329,7 @@ async function handleText(msg: TgMessage, env: Env, reply: Reply): Promise<void>
       return reply(`No entendí la fecha${found?.error ? `: ${found.error}` : ""}. Probá con 15/03, 15/03/1990 o 15 de marzo`);
     }
     await db.clearConversation(env.DB, msg.chat.id);
-    return addEntries(msg, env, [{ name: conv.name!, date: found.date!, phone: null, greetings: [] }], [], reply);
+    return addEntries(msg, env, [{ name: conv.name!, date: found.date!, phone: null, greetings: [], memorial: false }], [], reply);
   }
 
   if (conv?.step === "name") {
@@ -394,7 +399,7 @@ async function addEntries(
   }
 
   const similarWarnings: string[] = [];
-  for (const { name, date, phone, greetings } of entries) {
+  for (const { name, date, phone, greetings, memorial } of entries) {
     const dup = existing.find((e) => sameAs(e, name, date));
     if (dup) {
       // Si ya existía pero ahora viene con saludos o teléfono nuevos, lo completamos
@@ -409,7 +414,7 @@ async function addEntries(
     if (toAdd.some((e) => sameAs(e, name, date))) continue;
     const similar = existing.find((e) => isSimilarName(e.name, name));
     if (similar) similarWarnings.push(`• ${name} (${formatDate(date.day, date.month)}) ~ ${similar.name} (${formatDate(similar.day, similar.month)})`);
-    toAdd.push({ chat_id: msg.chat.id, kind: "birthday", name, ...date, phone, greetings });
+    toAdd.push({ chat_id: msg.chat.id, kind: "birthday", name, ...date, phone, greetings, memorial });
   }
 
   const added = await db.addEvents(env.DB, toAdd);

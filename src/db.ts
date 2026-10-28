@@ -14,15 +14,17 @@ export interface Event {
   /** Saludos sugeridos (hasta 3) */
   greetings: string[];
   phone: string | null;
+  /** Persona fallecida: el aviso es solo un recordatorio */
+  memorial: boolean;
 }
 
 export type NewEvent = Omit<Event, "id">;
 
 // En la base los saludos se guardan como JSON
-type EventRow = Omit<Event, "greetings"> & { greetings: string | null };
+type EventRow = Omit<Event, "greetings" | "memorial"> & { greetings: string | null; memorial: number };
 
 function toEvent(row: EventRow): Event {
-  return { ...row, greetings: row.greetings ? (JSON.parse(row.greetings) as string[]) : [] };
+  return { ...row, greetings: row.greetings ? (JSON.parse(row.greetings) as string[]) : [], memorial: row.memorial === 1 };
 }
 
 function greetingsJson(greetings: string[]): string | null {
@@ -38,8 +40,8 @@ export interface Conversation {
   payload: string | null;
 }
 
-const EVENT_COLS = "id, chat_id, kind, name, day, month, year, greetings, phone";
-const INSERT_COLS = ["chat_id", "kind", "name", "day", "month", "year", "greetings", "phone"] as const;
+const EVENT_COLS = "id, chat_id, kind, name, day, month, year, greetings, phone, memorial";
+const INSERT_COLS = ["chat_id", "kind", "name", "day", "month", "year", "greetings", "phone", "memorial"] as const;
 // D1 acepta hasta 100 parámetros por consulta
 const ROWS_PER_INSERT = Math.floor(100 / INSERT_COLS.length);
 
@@ -55,7 +57,7 @@ export async function addEvents(db: D1Database, events: NewEvent[]): Promise<Eve
     const placeholders = chunk.map(() => `(${INSERT_COLS.map(() => "?").join(", ")})`).join(", ");
     const { results } = await db
       .prepare(`INSERT INTO events (${INSERT_COLS.join(", ")}) VALUES ${placeholders} RETURNING ${EVENT_COLS}`)
-      .bind(...chunk.flatMap((e) => INSERT_COLS.map((c) => (c === "greetings" ? greetingsJson(e.greetings) : e[c]))))
+      .bind(...chunk.flatMap((e) => INSERT_COLS.map((c) => (c === "greetings" ? greetingsJson(e.greetings) : c === "memorial" ? Number(e.memorial) : e[c]))))
       .all<EventRow>();
     added.push(...results.map(toEvent));
   }
@@ -78,10 +80,11 @@ export async function updateExtras(db: D1Database, updates: { id: number; greeti
 export async function replaceEvent(db: D1Database, chatId: number, id: number, e: NewEvent): Promise<Event | null> {
   const row = await db
     .prepare(
-      `UPDATE events SET name = ?, day = ?, month = ?, year = COALESCE(?, year), greetings = COALESCE(?, greetings), phone = COALESCE(?, phone)
+      `UPDATE events SET name = ?, day = ?, month = ?, year = COALESCE(?, year), greetings = COALESCE(?, greetings),
+         phone = COALESCE(?, phone), memorial = ?
        WHERE id = ? AND chat_id = ? RETURNING ${EVENT_COLS}`,
     )
-    .bind(e.name, e.day, e.month, e.year, greetingsJson(e.greetings), e.phone, id, chatId)
+    .bind(e.name, e.day, e.month, e.year, greetingsJson(e.greetings), e.phone, Number(e.memorial), id, chatId)
     .first<EventRow>();
   return row && toEvent(row);
 }
@@ -103,7 +106,7 @@ export async function deleteEvent(db: D1Database, chatId: number, id: number): P
 export async function pendingFor(db: D1Database, d: YMD): Promise<Event[]> {
   const { results } = await db
     .prepare(
-      `SELECT e.id, e.chat_id, e.kind, e.name, e.day, e.month, e.year, e.greetings, e.phone
+      `SELECT e.id, e.chat_id, e.kind, e.name, e.day, e.month, e.year, e.greetings, e.phone, e.memorial
        FROM events e
        LEFT JOIN notifications n ON n.event_id = e.id AND n.sent_on = ?
        WHERE e.month = ? AND n.event_id IS NULL`,
