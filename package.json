@@ -1,0 +1,23 @@
+{
+  "name": "cumplebot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "poll": "node scripts/poll.mjs",
+    "db:migrate": "wrangler d1 migrations apply cumplebot --remote",
+    "db:migrate:local": "wrangler d1 migrations apply cumplebot --local",
+    "whatsapp": "npm run -s py:setup && .venv/bin/python scripts/whatsapp_cumples.py",
+    "pantalla": "npm run -s py:setup && .venv/bin/python scripts/pantalla_inicio.py",
+    "py:setup": "test -d .venv || (python3 -m venv .venv && .venv/bin/pip install -q -r scripts/requirements.txt)"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250901.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.30.0"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.dev.vars
+cumples-whatsapp*.txt
+.venv/
+pantalla-inicio*.txt
+__pycache__/
+estilo-whatsapp*.txt

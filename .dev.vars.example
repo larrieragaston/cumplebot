@@ -1,0 +1,5 @@
+TELEGRAM_BOT_TOKEN=123456:ABC...
+WEBHOOK_SECRET=una-clave-larga-y-random
+
+# Opcional: IDs de Telegram autorizados, separados por coma (vacío = cualquiera). En producción va como secreto.
+ALLOWED_USER_IDS=

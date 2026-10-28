@@ -1,0 +1,17 @@
+name = "cumplebot"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Corre cada hora; el Worker manda los avisos a partir de REMINDER_HOUR (hora local).
+# Si una corrida falla, la siguiente reintenta sin duplicar avisos.
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+TIMEZONE = "America/Argentina/Buenos_Aires"
+REMINDER_HOUR = "9"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cumplebot"
+database_id = "9d4ee359-038e-4e2c-8227-0e2ca1123c8f"
