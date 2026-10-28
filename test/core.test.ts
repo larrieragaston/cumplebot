@@ -75,7 +75,7 @@ suite("ocurrencias", () => {
 });
 
 suite("bot", () => {
-  const juan: Event = { id: 3, chat_id: 1, kind: "birthday", name: "Juan", day: 25, month: 10, year: 1990, greeting: null, phone: null };
+  const juan: Event = { id: 3, chat_id: 1, kind: "birthday", name: "Juan", day: 25, month: 10, year: 1990, greetings: [], phone: null };
   const anon: Event = { ...juan, id: 4, name: "Ana", year: null };
   const today = { year: 2026, month: 10, day: 24 };
 
@@ -115,28 +115,41 @@ suite("bot", () => {
 });
 
 suite("saludos", () => {
-  const base: Event = { id: 1, chat_id: 1, kind: "birthday", name: "Juan <3", day: 25, month: 10, year: null, greeting: null, phone: null };
+  const base: Event = { id: 1, chat_id: 1, kind: "birthday", name: "Juan <3", day: 25, month: 10, year: null, greetings: [], phone: null };
   const bday = { year: 2026, month: 10, day: 25 };
 
-  it("parseLine lee teléfono y saludo opcionales", () => {
+  it("parseLine lee teléfono y hasta 3 saludos opcionales", () => {
     expect(parseLine("Juan 15/03 | +54 9 11 2233-4455 | Feliz cumple crack!", 2026)).toEqual({
-      name: "Juan", date: { day: 15, month: 3, year: null }, phone: "5491122334455", greeting: "Feliz cumple crack!",
+      name: "Juan", date: { day: 15, month: 3, year: null }, phone: "5491122334455", greetings: ["Feliz cumple crack!"],
     });
-    expect(parseLine("Juan 15/03 | Feliz cumple 15 de marzo", 2026)).toMatchObject({ phone: null, greeting: "Feliz cumple 15 de marzo" });
-    expect(parseLine("Juan 15/03", 2026)).toMatchObject({ phone: null, greeting: null });
+    expect(parseLine("Juan 15/03 | Feliz cumple 15 de marzo", 2026)).toMatchObject({ phone: null, greetings: ["Feliz cumple 15 de marzo"] });
+    expect(parseLine("Juan 15/03 | a | b | c | d", 2026)).toMatchObject({ greetings: ["a", "b", "c"] });
+    expect(parseLine("Juan 15/03", 2026)).toMatchObject({ phone: null, greetings: [] });
   });
 
-  it("el aviso muestra el saludo y arma los botones", () => {
-    const msg = reminderMessage({ ...base, greeting: "Feliz cumple <amigo> & más", phone: "5491122334455" }, bday);
+  it("el aviso muestra los saludos numerados y un par de botones por saludo", () => {
+    const msg = reminderMessage({ ...base, greetings: ["Feliz cumple <amigo> & más", "Otro"], phone: "5491122334455" }, bday);
     expect(msg.text).toContain("<b>Juan &lt;3</b>");
-    expect(msg.text).toContain("<blockquote>Feliz cumple &lt;amigo&gt; &amp; más</blockquote>");
+    expect(msg.text).toContain("Saludos sugeridos:\n1. <blockquote>Feliz cumple &lt;amigo&gt; &amp; más</blockquote>\n2. <blockquote>Otro</blockquote>");
     expect(msg.buttons).toEqual([
-      [{ text: "💬 Saludar por WhatsApp", url: "https://wa.me/5491122334455?text=Feliz%20cumple%20%3Camigo%3E%20%26%20m%C3%A1s" }],
-      [{ text: "📋 Copiar saludo", copy_text: { text: "Feliz cumple <amigo> & más" } }],
+      [
+        { text: "💬 WhatsApp 1", url: "https://wa.me/5491122334455?text=Feliz%20cumple%20%3Camigo%3E%20%26%20m%C3%A1s" },
+        { text: "📋 Copiar 1", copy_text: { text: "Feliz cumple <amigo> & más" } },
+      ],
+      [
+        { text: "💬 WhatsApp 2", url: "https://wa.me/5491122334455?text=Otro" },
+        { text: "📋 Copiar 2", copy_text: { text: "Otro" } },
+      ],
     ]);
   });
 
-  it("con teléfono y sin saludo, abre WhatsApp con un saludo genérico", () => {
+  it("con un solo saludo no numera; sin teléfono solo copia", () => {
+    const msg = reminderMessage({ ...base, greetings: ["Hola"] }, bday);
+    expect(msg.text).toContain("Saludo sugerido:\n<blockquote>Hola</blockquote>");
+    expect(msg.buttons).toEqual([[{ text: "📋 Copiar", copy_text: { text: "Hola" } }]]);
+  });
+
+  it("con teléfono y sin saludos, abre WhatsApp con un saludo genérico", () => {
     const msg = reminderMessage({ ...base, phone: "5491122334455" }, bday);
     expect(msg.buttons).toHaveLength(1);
     expect(msg.text).toContain("No te olvides de saludar");

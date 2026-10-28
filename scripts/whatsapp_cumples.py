@@ -74,6 +74,9 @@ STOPWORDS = {
     "querido", "querida", "queridos", "lindo", "linda", "hermoso", "hermosa", "a", "al", "ese", "esa", "este", "esta",
     "uds", "ustedes", "usted", "ella", "ellos", "ellas", "gente", "chicos", "chicas", "muchachos", "familia",
     "hola", "buen", "buenas", "eh", "ah", "pero", "bueno", "dale", "obvio", "perdon", "sorry",
+    "ojala", "espero", "esperamos", "deseo", "deseos", "pases", "pase", "pasen", "pasenla", "pasa", "disfruten",
+    "disfrutes", "tengas", "re", "super", "gracias", "abrazos", "besote", "saludos", "felices", "enorme", "grande",
+    "casi", "justo", "recien", "atrasadisimo", "mil", "tarde", "temprano", "ahora", "aca", "alla",
 }
 # Apodos/relaciones: no son nombres, pero sirven para cruzar con otros chats ("feliz cumple primo")
 RELATIONAL = {
@@ -234,12 +237,13 @@ def day_distance(a: Candidate, b: Candidate) -> int:
 
 
 def nick_matches(nick: str, c: Candidate) -> bool:
-    """¿La palabra usada en un saludo coincide con el nombre de c o con cómo lo saludás vos?"""
+    """¿La palabra usada en un saludo coincide con el nombre de c? Si es un apodo ("negro", "pa"),
+    también vale que vos lo llames así en sus saludos."""
     nick = undiminish(norm(nick))
     for t in words(c.name or ""):
         if t.startswith(nick) or (len(t) >= 3 and nick.startswith(t)):
             return True
-    return nick in c.greeting_words()
+    return nick in RELATIONAL and nick in c.greeting_words()
 
 
 def load_people(conn: sqlite3.Connection) -> tuple[dict[str, str], set[str]]:
@@ -400,6 +404,9 @@ def dedupe(cands: list[Candidate]) -> list[Candidate]:
             if not other or (c.name and nick_matches(other, Candidate("chat", [], name=c.name))):
                 continue
             twin = next((o for o in chats if o is not c and not o.merged and near(o, c) and nick_matches(other, o)), None)
+            if twin and c.agendado and not twin.agendado:
+                c.absorb(twin, own=True)  # se queda el agendado
+                break
             if twin:
                 twin.absorb(c, own=False)
                 break

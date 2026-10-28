@@ -30,9 +30,12 @@ export interface Entry {
   name: string;
   date: ParsedDate;
   phone: string | null;
-  greeting: string | null;
+  greetings: string[];
 }
 
+const MAX_GREETINGS = 3;
+// Telegram limita el texto de un botón "copiar" a 256 caracteres
+const MAX_COPY_TEXT = 256;
 // Más de esto en una carga y solo mostramos el resumen
 const MAX_LISTED_ON_ADD = 10;
 const MAX_IMPORT_FILE_BYTES = 1_000_000;
@@ -68,7 +71,7 @@ function helpText(env: Env): string {
     "• Ana 2 de mayo de 1990\n" +
     "• cumple de Caro el 7/11\n" +
     "El año es opcional. Podés mandar varios juntos, uno por línea, o un archivo .txt.\n" +
-    "Opcional, separado con |: el saludo y su WhatsApp, ej: Juan 15/03 | +5491122334455 | ¡Feliz cumple crack!\n\n" +
+    "Opcional, separado con |: su WhatsApp y hasta 3 saludos, ej: Juan 15/03 | +5491122334455 | ¡Feliz cumple crack!\n\n" +
     "lista — ver todos\n" +
     "proximos — los próximos 30 días\n" +
     "borrar Juan — borrar (por nombre o por id)\n" +
@@ -95,7 +98,7 @@ export function describe(e: Event, ref: YMD): string {
   return `${ICONS[e.kind]} #${e.id} ${e.name} — ${formatDate(e.day, e.month)}${extra} — ${when}`;
 }
 
-/** Aviso del día (HTML), con el último saludo y botones para copiarlo o abrir WhatsApp con el texto ya escrito. */
+/** Aviso del día (HTML), con los saludos sugeridos y botones para copiarlos o abrir WhatsApp con el texto ya escrito. */
 export function reminderMessage(e: Event, d: YMD): { text: string; buttons: InlineButton[][] } {
   const name = escapeHtml(e.name);
   if (e.kind === "event") {
@@ -104,31 +107,35 @@ export function reminderMessage(e: Event, d: YMD): { text: string; buttons: Inli
   }
   const age = e.year ? ` Cumple ${d.year - e.year} 🥳` : "";
   let text = `🎂 ¡Hoy es el cumpleaños de <b>${name}</b>!${age}\n`;
-  text += e.greeting
-    ? `\nSaludo sugerido:\n<blockquote>${escapeHtml(e.greeting)}</blockquote>`
-    : "No te olvides de saludar 😉";
+  const many = e.greetings.length > 1;
+  if (!e.greetings.length) text += "No te olvides de saludar 😉";
+  else text += `\n${many ? "Saludos sugeridos" : "Saludo sugerido"}:\n`;
+  text += e.greetings.map((g, i) => `${many ? `${i + 1}. ` : ""}<blockquote>${escapeHtml(g)}</blockquote>`).join("\n");
 
-  const buttons: InlineButton[][] = [];
-  if (e.phone) {
-    const message = e.greeting ?? "¡Feliz cumple! 🎉";
-    buttons.push([{ text: "💬 Saludar por WhatsApp", url: `https://wa.me/${e.phone}?text=${encodeURIComponent(message)}` }]);
-  }
-  if (e.greeting) buttons.push([{ text: "📋 Copiar saludo", copy_text: { text: e.greeting.slice(0, 256) } }]);
+  const whatsapp = (message: string) => `https://wa.me/${e.phone}?text=${encodeURIComponent(message)}`;
+  const buttons: InlineButton[][] = e.greetings.map((g, i) => {
+    const n = many ? ` ${i + 1}` : "";
+    const row: InlineButton[] = [];
+    if (e.phone) row.push({ text: `💬 WhatsApp${n}`, url: whatsapp(g) });
+    row.push({ text: `📋 Copiar${n}`, copy_text: { text: g.slice(0, MAX_COPY_TEXT) } });
+    return row;
+  });
+  if (e.phone && !e.greetings.length) buttons.push([{ text: "💬 Saludar por WhatsApp", url: whatsapp("¡Feliz cumple! 🎉") }]);
   return { text, buttons };
 }
 
-/** Una línea de carga: "nombre fecha [| teléfono] [| saludo]". */
+/** Una línea de carga: "nombre fecha [| teléfono] [| saludo 1 | saludo 2 | saludo 3]". */
 export function parseLine(line: string, currentYear: number): Entry | { error: string } {
   const [main, ...extras] = line.split("|").map((s) => s.trim());
   const entry = extractEntry(main, currentYear);
   if ("error" in entry) return entry;
   let phone: string | null = null;
-  let greeting: string | null = null;
+  const greetings: string[] = [];
   for (const extra of extras.filter(Boolean)) {
     if (/^\+?[\d\s\-()]{8,}$/.test(extra)) phone = extra.replace(/\D/g, "");
-    else greeting = extra;
+    else if (greetings.length < MAX_GREETINGS) greetings.push(extra);
   }
-  return { ...entry, phone, greeting };
+  return { ...entry, phone, greetings };
 }
 
 /**
@@ -288,7 +295,7 @@ async function handleCallback(cb: TgCallbackQuery, env: Env): Promise<void> {
   }
   await db.clearConversation(env.DB, chatId);
   const entry = JSON.parse(conv.payload) as Entry;
-  const newEvent: db.NewEvent = { chat_id: chatId, kind: "birthday", name: entry.name, ...entry.date, phone: entry.phone, greeting: entry.greeting };
+  const newEvent: db.NewEvent = { chat_id: chatId, kind: "birthday", name: entry.name, ...entry.date, phone: entry.phone, greetings: entry.greetings };
   const ref = today(env);
   if (add[1] === "no") {
     await edit("Cancelado, no cargué nada.");
@@ -317,7 +324,7 @@ async function handleText(msg: TgMessage, env: Env, reply: Reply): Promise<void>
       return reply(`No entendí la fecha${found?.error ? `: ${found.error}` : ""}. Probá con 15/03, 15/03/1990 o 15 de marzo`);
     }
     await db.clearConversation(env.DB, msg.chat.id);
-    return addEntries(msg, env, [{ name: conv.name!, date: found.date!, phone: null, greeting: null }], [], reply);
+    return addEntries(msg, env, [{ name: conv.name!, date: found.date!, phone: null, greetings: [] }], [], reply);
   }
 
   if (conv?.step === "name") {
@@ -363,7 +370,7 @@ async function addEntries(
   const ref = today(env);
   const existing = await db.listEvents(env.DB, msg.chat.id);
   const toAdd: db.NewEvent[] = [];
-  const toUpdate: { id: number; greeting: string | null; phone: string | null }[] = [];
+  const toUpdate: { id: number; greetings: string[]; phone: string | null }[] = [];
   const duplicated: string[] = [];
   const sameAs = (a: { name: string; day: number; month: number }, name: string, date: ParsedDate) =>
     fold(a.name) === fold(name) && a.day === date.day && a.month === date.month;
@@ -387,12 +394,13 @@ async function addEntries(
   }
 
   const similarWarnings: string[] = [];
-  for (const { name, date, phone, greeting } of entries) {
+  for (const { name, date, phone, greetings } of entries) {
     const dup = existing.find((e) => sameAs(e, name, date));
     if (dup) {
-      // Si ya existía pero ahora viene con saludo o teléfono, lo completamos
-      if ((greeting && greeting !== dup.greeting) || (phone && phone !== dup.phone)) {
-        toUpdate.push({ id: dup.id, greeting, phone });
+      // Si ya existía pero ahora viene con saludos o teléfono nuevos, lo completamos
+      const newGreetings = greetings.length > 0 && JSON.stringify(greetings) !== JSON.stringify(dup.greetings);
+      if (newGreetings || (phone && phone !== dup.phone)) {
+        toUpdate.push({ id: dup.id, greetings, phone });
       } else {
         duplicated.push(`• ${dup.name} (${formatDate(dup.day, dup.month)})`);
       }
@@ -401,7 +409,7 @@ async function addEntries(
     if (toAdd.some((e) => sameAs(e, name, date))) continue;
     const similar = existing.find((e) => isSimilarName(e.name, name));
     if (similar) similarWarnings.push(`• ${name} (${formatDate(date.day, date.month)}) ~ ${similar.name} (${formatDate(similar.day, similar.month)})`);
-    toAdd.push({ chat_id: msg.chat.id, kind: "birthday", name, ...date, phone, greeting });
+    toAdd.push({ chat_id: msg.chat.id, kind: "birthday", name, ...date, phone, greetings });
   }
 
   const added = await db.addEvents(env.DB, toAdd);
@@ -411,7 +419,7 @@ async function addEntries(
   if (added.length === 1) parts.push(`Listo ✅\n${describe(added[0], ref)}`);
   else if (added.length > MAX_LISTED_ON_ADD) parts.push(`Agregué ${added.length} ✅ Mandá lista para verlos.`);
   else if (added.length > 1) parts.push(`Agregué ${added.length} ✅\n${added.map((e) => describe(e, ref)).join("\n")}`);
-  if (toUpdate.length) parts.push(`Actualicé el saludo/teléfono de ${toUpdate.length} que ya estaban.`);
+  if (toUpdate.length) parts.push(`Actualicé los saludos/teléfono de ${toUpdate.length} que ya estaban.`);
   if (duplicated.length > MAX_LISTED_ON_ADD) parts.push(`${duplicated.length} ya estaban cargados.`);
   else if (duplicated.length) parts.push(`Ya estaban cargados:\n${duplicated.join("\n")}`);
   if (similarWarnings.length) parts.push(`Ojo, estos se parecen a otros que ya tenías (revisá con lista o borrar):\n${similarWarnings.join("\n")}`);

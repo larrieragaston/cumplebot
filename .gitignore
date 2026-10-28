@@ -1,7 +1,7 @@
 node_modules/
 .wrangler/
 .dev.vars
-cumples-whatsapp*.txt
+cumples-*.txt
 .venv/
 pantalla-inicio*.txt
 __pycache__/

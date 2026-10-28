@@ -11,11 +11,23 @@ export interface Event {
   day: number;
   month: number;
   year: number | null;
-  greeting: string | null;
+  /** Saludos sugeridos (hasta 3) */
+  greetings: string[];
   phone: string | null;
 }
 
 export type NewEvent = Omit<Event, "id">;
+
+// En la base los saludos se guardan como JSON
+type EventRow = Omit<Event, "greetings"> & { greetings: string | null };
+
+function toEvent(row: EventRow): Event {
+  return { ...row, greetings: row.greetings ? (JSON.parse(row.greetings) as string[]) : [] };
+}
+
+function greetingsJson(greetings: string[]): string | null {
+  return greetings.length ? JSON.stringify(greetings) : null;
+}
 
 export interface Conversation {
   chat_id: number;
@@ -26,8 +38,8 @@ export interface Conversation {
   payload: string | null;
 }
 
-const EVENT_COLS = "id, chat_id, kind, name, day, month, year, greeting, phone";
-const INSERT_COLS = ["chat_id", "kind", "name", "day", "month", "year", "greeting", "phone"] as const;
+const EVENT_COLS = "id, chat_id, kind, name, day, month, year, greetings, phone";
+const INSERT_COLS = ["chat_id", "kind", "name", "day", "month", "year", "greetings", "phone"] as const;
 // D1 acepta hasta 100 parámetros por consulta
 const ROWS_PER_INSERT = Math.floor(100 / INSERT_COLS.length);
 
@@ -43,58 +55,62 @@ export async function addEvents(db: D1Database, events: NewEvent[]): Promise<Eve
     const placeholders = chunk.map(() => `(${INSERT_COLS.map(() => "?").join(", ")})`).join(", ");
     const { results } = await db
       .prepare(`INSERT INTO events (${INSERT_COLS.join(", ")}) VALUES ${placeholders} RETURNING ${EVENT_COLS}`)
-      .bind(...chunk.flatMap((e) => INSERT_COLS.map((c) => e[c])))
-      .all<Event>();
-    added.push(...results);
+      .bind(...chunk.flatMap((e) => INSERT_COLS.map((c) => (c === "greetings" ? greetingsJson(e.greetings) : e[c]))))
+      .all<EventRow>();
+    added.push(...results.map(toEvent));
   }
   return added;
 }
 
-/** Completa saludo y/o teléfono de eventos existentes (sin pisar con vacío). */
-export async function updateExtras(db: D1Database, updates: { id: number; greeting: string | null; phone: string | null }[]): Promise<void> {
+/** Completa saludos y/o teléfono de eventos existentes (sin pisar con vacío). */
+export async function updateExtras(db: D1Database, updates: { id: number; greetings: string[]; phone: string | null }[]): Promise<void> {
   if (!updates.length) return;
   await db.batch(
     updates.map((u) =>
-      db.prepare("UPDATE events SET greeting = COALESCE(?, greeting), phone = COALESCE(?, phone) WHERE id = ?").bind(u.greeting, u.phone, u.id),
+      db
+        .prepare("UPDATE events SET greetings = COALESCE(?, greetings), phone = COALESCE(?, phone) WHERE id = ?")
+        .bind(greetingsJson(u.greetings), u.phone, u.id),
     ),
   );
 }
 
-/** Reemplaza nombre y fecha de un evento existente; saludo, teléfono y año solo si vienen. */
+/** Reemplaza nombre y fecha de un evento existente; saludos, teléfono y año solo si vienen. */
 export async function replaceEvent(db: D1Database, chatId: number, id: number, e: NewEvent): Promise<Event | null> {
-  return db
+  const row = await db
     .prepare(
-      `UPDATE events SET name = ?, day = ?, month = ?, year = COALESCE(?, year), greeting = COALESCE(?, greeting), phone = COALESCE(?, phone)
+      `UPDATE events SET name = ?, day = ?, month = ?, year = COALESCE(?, year), greetings = COALESCE(?, greetings), phone = COALESCE(?, phone)
        WHERE id = ? AND chat_id = ? RETURNING ${EVENT_COLS}`,
     )
-    .bind(e.name, e.day, e.month, e.year, e.greeting, e.phone, id, chatId)
-    .first<Event>();
+    .bind(e.name, e.day, e.month, e.year, greetingsJson(e.greetings), e.phone, id, chatId)
+    .first<EventRow>();
+  return row && toEvent(row);
 }
 
 export async function listEvents(db: D1Database, chatId: number): Promise<Event[]> {
-  const { results } = await db.prepare(`SELECT ${EVENT_COLS} FROM events WHERE chat_id = ?`).bind(chatId).all<Event>();
-  return results;
+  const { results } = await db.prepare(`SELECT ${EVENT_COLS} FROM events WHERE chat_id = ?`).bind(chatId).all<EventRow>();
+  return results.map(toEvent);
 }
 
 export async function deleteEvent(db: D1Database, chatId: number, id: number): Promise<Event | null> {
-  return db
+  const row = await db
     .prepare(`DELETE FROM events WHERE id = ? AND chat_id = ? RETURNING ${EVENT_COLS}`)
     .bind(id, chatId)
-    .first<Event>();
+    .first<EventRow>();
+  return row && toEvent(row);
 }
 
 /** Eventos (de todos los chats) que ocurren en `d` y todavía no fueron avisados. */
 export async function pendingFor(db: D1Database, d: YMD): Promise<Event[]> {
   const { results } = await db
     .prepare(
-      `SELECT e.id, e.chat_id, e.kind, e.name, e.day, e.month, e.year, e.greeting, e.phone
+      `SELECT e.id, e.chat_id, e.kind, e.name, e.day, e.month, e.year, e.greetings, e.phone
        FROM events e
        LEFT JOIN notifications n ON n.event_id = e.id AND n.sent_on = ?
        WHERE e.month = ? AND n.event_id IS NULL`,
     )
     .bind(isoDate(d), d.month)
-    .all<Event>();
-  return results.filter((e) => occursOn(e.day, e.month, d));
+    .all<EventRow>();
+  return results.map(toEvent).filter((e) => occursOn(e.day, e.month, d));
 }
 
 export async function markNotified(db: D1Database, eventId: number, d: YMD): Promise<void> {
